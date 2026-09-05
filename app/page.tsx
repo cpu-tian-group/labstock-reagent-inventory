@@ -485,7 +485,7 @@ function AlertsView({
       <section className="view-card completion-card">
         <div className="completion-copy">
           <div className="view-card-heading-icon completion-icon"><ClipboardList size={19} /></div>
-          <div><h2>本周盘点</h2><p>共有 {pendingInfo} 条记录仍缺少有效期或供应商信息，可从试剂库逐条补充。</p></div>
+          <div><h2>本周盘点</h2><p>共有 {pendingInfo.length} 条记录仍缺少有效期或供应商信息，可从试剂库逐条补充。</p></div>
         </div>
         <Button variant="outline" onClick={onViewInventory}>打开试剂库</Button>
       </section>
