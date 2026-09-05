@@ -404,6 +404,102 @@ export async function insertReagent(
   return getById(db, Number(result.meta.last_row_id));
 }
 
+export async function insertReagentsBatch(
+  db: D1Database,
+  inputs: ReagentWriteInput[],
+  user: RequestUser,
+  importKey: string,
+) {
+  const markerKey = `bulk-import:${importKey}`;
+  const marker = await db
+    .prepare('SELECT value FROM inventory_meta WHERE key = ?1')
+    .bind(markerKey)
+    .first<{ value: string }>();
+  if (marker) {
+    return {
+      inserted: 0,
+      skipped: inputs.length,
+      alreadyImported: true,
+    };
+  }
+
+  const existingRows = await db
+    .prepare('SELECT name, location FROM reagents')
+    .all<{ name: string; location: string }>();
+  const existingKeys = new Set(
+    existingRows.results.map((row) => `${row.name}\u0000${row.location}`),
+  );
+  const seenKeys = new Set<string>();
+  const pending = inputs
+    .map((input) => {
+      const reagent = normalizeWriteInput(input);
+      return {
+        ...reagent,
+        // The source sheet contains names and locations, but no stock counts.
+        // Keep these records out of low-stock alerts until the group completes
+        // a physical count in the app.
+        threshold: 0,
+        status: '充足' as ReagentStatus,
+      };
+    })
+    .filter((reagent) => {
+      const key = `${reagent.name}\u0000${reagent.location}`;
+      if (existingKeys.has(key) || seenKeys.has(key)) return false;
+      seenKeys.add(key);
+      return true;
+    });
+
+  const now = new Date().toISOString();
+  const statements = pending.map((reagent) =>
+    db
+      .prepare(
+        `INSERT INTO reagents
+          (name, alias, cas, category, location, storage_temp, stock, unit,
+           threshold, status, supplier, updated, expiry, notes, created_by,
+           created_by_email, updated_by, updated_by_email, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                 ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
+      )
+      .bind(
+        reagent.name,
+        reagent.alias,
+        reagent.cas,
+        reagent.category,
+        reagent.location,
+        reagent.storageTemp,
+        reagent.stock,
+        reagent.unit,
+        reagent.threshold,
+        reagent.status,
+        reagent.supplier,
+        reagent.updated,
+        reagent.expiry,
+        reagent.notes,
+        user.id,
+        user.email,
+        user.id,
+        user.email,
+        now,
+        now,
+      ),
+  );
+
+  // Keep each D1 batch comfortably below the platform statement limit.
+  for (let index = 0; index < statements.length; index += 50) {
+    await db.batch(statements.slice(index, index + 50));
+  }
+  await db
+    .prepare('INSERT OR IGNORE INTO inventory_meta (key, value) VALUES (?1, ?2)')
+    .bind(markerKey, now)
+    .run();
+
+  return {
+    inserted: pending.length,
+    skipped: inputs.length - pending.length,
+    alreadyImported: false,
+  };
+}
+
 export async function updateReagent(
   db: D1Database,
   id: number,

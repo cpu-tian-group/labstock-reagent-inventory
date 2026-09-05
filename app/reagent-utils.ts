@@ -7,6 +7,7 @@ export const categoryFilters = [
   '染料/显色',
   '核酸/脂质',
   '有机合成',
+  '危险化学品',
   '其他',
 ];
 

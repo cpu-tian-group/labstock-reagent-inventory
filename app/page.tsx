@@ -403,6 +403,7 @@ function getCategoryTone(category: string) {
     '染料/显色': 'category-pink',
     '核酸/脂质': 'category-green',
     有机合成: 'category-slate',
+    危险化学品: 'category-rose',
     其他: 'category-slate',
   };
   return tones[category] ?? 'category-slate';
@@ -2028,6 +2029,13 @@ export default function Home() {
         >
           <AlertTriangle size={18} />
           <span>提醒</span>
+        </a>
+        <a
+          className={`mobile-nav-link ${activeView === 'categories' ? 'active' : ''}`}
+          href="#categories"
+        >
+          <Layers3 size={18} />
+          <span>分类</span>
         </a>
         <button
           className="mobile-add"
