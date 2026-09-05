@@ -1296,7 +1296,7 @@ export default function Home() {
                 expiry: { type: 'string' },
                 notes: { type: 'string' },
               },
-              required: ['name'],
+              required: ['name', 'location'],
               additionalProperties: false,
             },
             annotations: { readOnlyHint: false, untrustedContentHint: false },
@@ -1476,6 +1476,10 @@ export default function Home() {
   async function handleSave(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!draft.name.trim()) return;
+    if (editingId === null && !draft.location.trim()) {
+      window.alert('请填写存放位置后再保存。');
+      return;
+    }
 
     setIsSaving(true);
     try {
@@ -2213,14 +2217,19 @@ export default function Home() {
               </select>
             </div>
             <div className="form-field">
-              <label htmlFor="reagent-location">存放位置</label>
+              <label htmlFor="reagent-location">
+                存放位置 {editingId === null ? '*' : ''}
+              </label>
               <Input
                 id="reagent-location"
                 value={draft.location}
                 onChange={(event) =>
                   updateDraft('location', event.target.value)
                 }
-                placeholder="例如：A1"
+                placeholder={
+                  editingId === null ? '例如：A1（新增时必填）' : '例如：A1'
+                }
+                required={editingId === null}
               />
             </div>
             <div className="form-field">

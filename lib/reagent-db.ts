@@ -164,13 +164,15 @@ export function normalizeWriteInput(
   const stock = asStock(input.stock ?? existing?.stock ?? 0);
   const threshold = existing?.threshold ?? 1;
   const expiry = asText(input.expiry, existing?.expiry ?? '待录入') || '待录入';
+  const locationValue = asText(input.location, existing?.location ?? '');
+  if (!existing && !locationValue) throw new Error('存放位置不能为空');
 
   return {
     name,
     alias: asText(input.alias, existing?.alias ?? '—') || '—',
     cas: asText(input.cas, existing?.cas ?? '—') || '—',
     category,
-    location: asText(input.location, existing?.location ?? '待分配') || '待分配',
+    location: locationValue || existing?.location || '待分配',
     storageTemp:
       asText(input.storageTemp, existing?.storageTemp ?? '待确认') || '待确认',
     stock,
