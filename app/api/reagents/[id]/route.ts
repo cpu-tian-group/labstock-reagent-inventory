@@ -1,9 +1,9 @@
 import {
-  deleteReagent,
   ensureSeeded,
   getDatabase,
   getReagentById,
   getRequestUser,
+  moveReagentToTrash,
   recordActivity,
   updateReagent,
   type ReagentWriteInput,
@@ -78,18 +78,18 @@ export async function DELETE(
     const id = parseId(await context.params);
     const user = getRequestUser(request);
     const existing = await getReagentById(db, id);
-    const deleted = await deleteReagent(db, id);
-    if (!deleted) return json({ error: '试剂不存在或已被删除。' }, { status: 404 });
+    const deleted = await moveReagentToTrash(db, id, user);
+    if (!deleted) return json({ error: '试剂不存在或已在回收站。' }, { status: 404 });
     if (existing) {
       await recordActivity(db, {
-        action: '删除',
+        action: '移入回收站',
         reagentId: existing.id,
         reagentName: existing.name,
         user,
-        summary: `从试剂库删除 · ${existing.location}`,
+        summary: `移入回收站 · ${existing.location}`,
       });
     }
-    return json({ deleted: true });
+    return json({ deleted: true, trashed: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : '删除试剂失败';
     return json({ error: message }, { status: 400 });

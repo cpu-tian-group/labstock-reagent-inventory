@@ -21,6 +21,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings2,
   SlidersHorizontal,
@@ -61,9 +62,17 @@ type Reagent = {
   updated: string;
   expiry: string;
   notes: string;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
 };
 
-type AppView = 'inventory' | 'alerts' | 'history' | 'categories' | 'settings';
+type AppView =
+  | 'inventory'
+  | 'alerts'
+  | 'history'
+  | 'categories'
+  | 'settings'
+  | 'trash';
 
 type Activity = {
   id: number;
@@ -77,6 +86,7 @@ type Activity = {
 };
 
 type ActivityState = 'idle' | 'loading' | 'ready' | 'offline';
+type TrashState = 'idle' | 'loading' | 'ready' | 'offline';
 
 type ModelContextLike = {
   registerTool: (
@@ -96,6 +106,23 @@ type ModelContextLike = {
 };
 
 const initialReagents: Reagent[] = [];
+
+async function fetchWithRetry(path: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(path, { cache: 'no-store' });
+      if (response.ok || response.status === 401) return response;
+      lastError = new Error(`请求失败（${response.status}）`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt === 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('网络连接失败');
+}
 
 const emptyDraft = {
   name: '',
@@ -160,10 +187,46 @@ async function deleteReagentRequest(id: number) {
   if (!response.ok) throw new Error(payload.error || '删除试剂失败');
 }
 
-async function fetchActivitiesRequest() {
-  const response = await fetch('/api/activity?limit=100', {
+async function fetchTrashRequest() {
+  const response = await fetchWithRetry('/api/trash?limit=200');
+  const payload = (await response.json().catch(() => ({}))) as {
+    reagents?: Reagent[];
+    error?: string;
+  };
+  if (!response.ok || !Array.isArray(payload.reagents)) {
+    throw new Error(payload.error || '回收站暂时不可用');
+  }
+  return payload.reagents;
+}
+
+async function restoreReagentRequest(id: number) {
+  const response = await fetch(`/api/reagents/${id}/restore`, {
+    method: 'POST',
     cache: 'no-store',
   });
+  const payload = (await response.json().catch(() => ({}))) as {
+    reagent?: Reagent;
+    error?: string;
+  };
+  if (!response.ok || !payload.reagent) {
+    throw new Error(payload.error || '恢复试剂失败');
+  }
+  return payload.reagent;
+}
+
+async function permanentlyDeleteReagentRequest(id: number) {
+  const response = await fetch(`/api/trash/${id}`, {
+    method: 'DELETE',
+    cache: 'no-store',
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    error?: string;
+  };
+  if (!response.ok) throw new Error(payload.error || '彻底删除失败');
+}
+
+async function fetchActivitiesRequest() {
+  const response = await fetchWithRetry('/api/activity?limit=100');
   const payload = (await response.json().catch(() => ({}))) as {
     activities?: Activity[];
     error?: string;
@@ -320,7 +383,7 @@ function getCategoryTone(category: string) {
 
 function getViewFromHash(hash: string): AppView {
   const value = hash.replace(/^#/, '') as AppView;
-  return ['inventory', 'alerts', 'history', 'categories', 'settings'].includes(value)
+  return ['inventory', 'alerts', 'history', 'categories', 'settings', 'trash'].includes(value)
     ? value
     : 'inventory';
 }
@@ -540,7 +603,7 @@ function HistoryView({
         ) : (
           <div className="activity-list">
             {activities.map((activity) => {
-              const isDelete = activity.action === '删除';
+              const isDelete = ['删除', '移入回收站', '彻底删除'].includes(activity.action);
               const isAdd = activity.action === '新增' || activity.action === '导入';
               return (
                 <div className="activity-row" key={activity.id}>
@@ -678,6 +741,101 @@ function SettingsView({
   );
 }
 
+function TrashView({
+  reagents,
+  state,
+  actionId,
+  onRefresh,
+  onRestore,
+  onPermanentDelete,
+  onAdd,
+}: {
+  reagents: Reagent[];
+  state: TrashState;
+  actionId: number | null;
+  onRefresh: () => void;
+  onRestore: (reagent: Reagent) => void;
+  onPermanentDelete: (reagent: Reagent) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="workspace-view">
+      <WorkspaceViewHeader
+        eyebrow="TOOLS / RECYCLE BIN"
+        title="回收站"
+        description="误删的试剂会先移到这里，不会立即从数据库消失。恢复后会重新出现在共享试剂库。"
+        action={
+          <div className="view-header-actions">
+            <Button variant="outline" onClick={onRefresh} disabled={state === 'loading'}>
+              <RefreshCw size={15} className={state === 'loading' ? 'spin-icon' : ''} />
+              刷新回收站
+            </Button>
+            <Button className="view-header-button" onClick={onAdd}>
+              <Plus size={17} />
+              新增试剂
+            </Button>
+          </div>
+        }
+      />
+
+      <section className="view-card trash-card">
+        <div className="view-card-heading">
+          <div>
+            <h2>已移入回收站</h2>
+            <p>默认保留记录，只有点击“永久删除”才会真正从数据库移除。</p>
+          </div>
+          <Trash2 size={20} className="view-card-heading-icon" />
+        </div>
+        {state === 'loading' && reagents.length === 0 ? (
+          <div className="view-loading"><RefreshCw size={20} className="spin-icon" />正在加载回收站…</div>
+        ) : state === 'offline' && reagents.length === 0 ? (
+          <div className="view-empty">
+            <RefreshCw size={26} />
+            <strong>回收站暂时无法连接</strong>
+            <span>请检查网络后点击“刷新回收站”。</span>
+            <Button variant="outline" onClick={onRefresh}>重新连接</Button>
+          </div>
+        ) : reagents.length === 0 ? (
+          <div className="view-empty">
+            <CheckCircle2 size={26} />
+            <strong>回收站是空的</strong>
+            <span>删除试剂时会先移动到这里，方便之后恢复。</span>
+          </div>
+        ) : (
+          <div className="trash-list">
+            {reagents.map((reagent) => {
+              const isBusy = actionId === reagent.id;
+              return (
+                <div className="trash-row" key={reagent.id}>
+                  <div className="trash-row-icon"><Trash2 size={17} /></div>
+                  <div className="trash-row-main">
+                    <strong>{reagent.name}</strong>
+                    <span>{reagent.category} · 原位置 {reagent.location} · {reagent.storageTemp}</span>
+                  </div>
+                  <div className="trash-row-meta">
+                    <span>删除于 {reagent.deletedAt ? formatActivityTime(reagent.deletedAt) : '时间未知'}</span>
+                    <span>{reagent.deletedBy ? '组内成员操作' : '系统操作'}</span>
+                  </div>
+                  <div className="trash-row-actions">
+                    <Button variant="outline" onClick={() => onRestore(reagent)} disabled={isBusy}>
+                      {isBusy ? <RefreshCw size={14} className="spin-icon" /> : <RotateCcw size={14} />}
+                      恢复
+                    </Button>
+                    <Button variant="outline" className="permanent-delete-button" onClick={() => onPermanentDelete(reagent)} disabled={isBusy}>
+                      <Trash2 size={14} />
+                      永久删除
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 export default function Home() {
   const [reagents, setReagents] = useState(initialReagents);
   const [search, setSearch] = useState('');
@@ -698,6 +856,9 @@ export default function Home() {
   const [filterStatus, setFilterStatus] = useState('全部');
   const [activities, setActivities] = useState<Activity[]>([]);
   const [activityState, setActivityState] = useState<ActivityState>('idle');
+  const [trashReagents, setTrashReagents] = useState<Reagent[]>([]);
+  const [trashState, setTrashState] = useState<TrashState>('idle');
+  const [trashActionId, setTrashActionId] = useState<number | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const reagentsRef = useRef(reagents);
 
@@ -718,7 +879,7 @@ export default function Home() {
     let active = true;
     const checkInviteAccess = async () => {
       try {
-        const response = await fetch('/api/access', { cache: 'no-store' });
+        const response = await fetchWithRetry('/api/access');
         const payload = (await response.json().catch(() => ({}))) as {
           authenticated?: boolean;
         };
@@ -743,7 +904,7 @@ export default function Home() {
   async function refreshSharedInventory() {
     setSyncState('loading');
     try {
-      const response = await fetch('/api/reagents', { cache: 'no-store' });
+      const response = await fetchWithRetry('/api/reagents');
       const payload = (await response.json().catch(() => ({}))) as {
         reagents?: Reagent[];
         error?: string;
@@ -763,8 +924,24 @@ export default function Home() {
     }
   }
 
+  async function refreshTrash() {
+    setTrashState('loading');
+    try {
+      setTrashReagents(await fetchTrashRequest());
+      setTrashState('ready');
+    } catch {
+      setTrashState('offline');
+    }
+  }
+
   useEffect(() => {
-    if (accessState === 'authorized') void refreshSharedInventory();
+    if (accessState === 'authorized') {
+      const timer = window.setTimeout(() => {
+        void refreshSharedInventory();
+        void refreshTrash();
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
   }, [accessState]);
 
   async function refreshActivityLog() {
@@ -779,7 +956,8 @@ export default function Home() {
 
   useEffect(() => {
     if (accessState === 'authorized' && activeView === 'history') {
-      void refreshActivityLog();
+      const timer = window.setTimeout(() => void refreshActivityLog(), 0);
+      return () => window.clearTimeout(timer);
     }
   }, [accessState, activeView]);
 
@@ -950,6 +1128,7 @@ export default function Home() {
     await fetch('/api/access', { method: 'DELETE', cache: 'no-store' }).catch(() => undefined);
     setSelected(null);
     setReagents([]);
+    setTrashReagents([]);
     setActiveView('inventory');
     setAccessState('locked');
     window.location.hash = 'inventory';
@@ -1046,7 +1225,7 @@ export default function Home() {
   }
 
   async function handleDelete(reagent: Reagent) {
-    if (!window.confirm(`确定删除“${reagent.name}”吗？删除后所有组员都将看不到这条记录。`)) {
+    if (!window.confirm(`确定把“${reagent.name}”移入回收站吗？之后仍可以恢复。`)) {
       return;
     }
 
@@ -1055,9 +1234,44 @@ export default function Home() {
       setReagents((current) => current.filter((item) => item.id !== reagent.id));
       setSelected(null);
       setSyncState('ready');
+      void refreshTrash();
       void refreshActivityLog();
     } catch (error) {
       window.alert(error instanceof Error ? error.message : '删除失败，请稍后重试。');
+    }
+  }
+
+  async function handleRestore(reagent: Reagent) {
+    setTrashActionId(reagent.id);
+    try {
+      const restored = await restoreReagentRequest(reagent.id);
+      setTrashReagents((current) => current.filter((item) => item.id !== reagent.id));
+      setReagents((current) => [restored, ...current.filter((item) => item.id !== restored.id)]);
+      setSyncState('ready');
+      void refreshActivityLog();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '恢复失败，请稍后重试。');
+      void refreshTrash();
+    } finally {
+      setTrashActionId(null);
+    }
+  }
+
+  async function handlePermanentDelete(reagent: Reagent) {
+    if (!window.confirm(`确定永久删除“${reagent.name}”吗？此操作无法恢复。`)) {
+      return;
+    }
+
+    setTrashActionId(reagent.id);
+    try {
+      await permanentlyDeleteReagentRequest(reagent.id);
+      setTrashReagents((current) => current.filter((item) => item.id !== reagent.id));
+      void refreshActivityLog();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '彻底删除失败，请稍后重试。');
+      void refreshTrash();
+    } finally {
+      setTrashActionId(null);
     }
   }
 
@@ -1104,6 +1318,16 @@ export default function Home() {
         </div>
       </header>
 
+      {syncState === 'offline' && (
+        <div className="sync-banner" role="alert">
+          <span>共享数据库暂时无法连接，当前页面可能不是最新数据。</span>
+          <Button variant="outline" onClick={() => void refreshSharedInventory()}>
+            <RefreshCw size={14} />
+            重新连接
+          </Button>
+        </div>
+      )}
+
       <div className="app-layout">
         <aside className="sidebar" aria-label="主导航">
           <div className="sidebar-section-label">WORKSPACE</div>
@@ -1133,6 +1357,11 @@ export default function Home() {
             <a className={`sidebar-link ${activeView === 'settings' ? 'active' : ''}`} href="#settings">
               <Settings2 size={17} />
               <span>设置</span>
+            </a>
+            <a className={`sidebar-link ${activeView === 'trash' ? 'active' : ''}`} href="#trash">
+              <Trash2 size={17} />
+              <span>回收站</span>
+              <span className="nav-count trash-count">{trashReagents.length}</span>
             </a>
           </nav>
 
@@ -1414,6 +1643,17 @@ export default function Home() {
               onSignOut={() => void handleSignOut()}
             />
           )}
+          {activeView === 'trash' && (
+            <TrashView
+              reagents={trashReagents}
+              state={trashState}
+              actionId={trashActionId}
+              onRefresh={() => void refreshTrash()}
+              onRestore={(reagent) => void handleRestore(reagent)}
+              onPermanentDelete={(reagent) => void handlePermanentDelete(reagent)}
+              onAdd={openAddDialog}
+            />
+          )}
         </main>
       </div>
 
@@ -1441,6 +1681,10 @@ export default function Home() {
         <a className={`mobile-nav-link ${activeView === 'settings' ? 'active' : ''}`} href="#settings">
           <UserRound size={18} />
           <span>我的</span>
+        </a>
+        <a className={`mobile-nav-link ${activeView === 'trash' ? 'active' : ''}`} href="#trash">
+          <Trash2 size={18} />
+          <span>回收站</span>
         </a>
       </nav>
 

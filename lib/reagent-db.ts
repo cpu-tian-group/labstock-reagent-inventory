@@ -21,6 +21,8 @@ export type ReagentRecord = {
   updated: string;
   expiry: string;
   notes: string;
+  deletedAt: string | null;
+  deletedBy: string | null;
 };
 
 export type ReagentWriteInput = {
@@ -69,6 +71,8 @@ type ReagentRow = {
   updated: string;
   expiry: string;
   notes: string;
+  deleted_at: string | null;
+  deleted_by: string | null;
 };
 
 type ActivityRow = {
@@ -87,7 +91,7 @@ const allowedCategories = new Set(categoryFilters.slice(1));
 
 const selectColumns = `
   id, name, alias, cas, category, location, storage_temp, stock, unit,
-  threshold, status, supplier, updated, expiry, notes
+  threshold, status, supplier, updated, expiry, notes, deleted_at, deleted_by
 `;
 
 export function getDatabase() {
@@ -102,10 +106,13 @@ export function getRequestUser(request: Request): RequestUser {
 }
 
 export function getSeedReagents(): ReagentRecord[] {
-  return fridgeReagents.map((reagent) => ({
+  return fridgeReagents.map((reagent, index) => ({
+    id: index + 1,
     ...reagent,
     category: classifyReagent(reagent.name),
     status: reagent.status as ReagentStatus,
+    deletedAt: null,
+    deletedBy: null,
   }));
 }
 
@@ -196,19 +203,28 @@ function toReagent(row: ReagentRow): ReagentRecord {
     updated: row.updated,
     expiry: row.expiry,
     notes: row.notes,
+    deletedAt: row.deleted_at ?? null,
+    deletedBy: row.deleted_by ?? null,
   };
 }
 
-async function getById(db: D1Database, id: number) {
+async function getById(db: D1Database, id: number, includeDeleted = false) {
   const row = await db
-    .prepare(`SELECT ${selectColumns} FROM reagents WHERE id = ?1`)
+    .prepare(
+      `SELECT ${selectColumns} FROM reagents
+       WHERE id = ?1 ${includeDeleted ? '' : 'AND deleted_at IS NULL'}`,
+    )
     .bind(id)
     .first<ReagentRow>();
   return row ? toReagent(row) : null;
 }
 
-export async function getReagentById(db: D1Database, id: number) {
-  return getById(db, id);
+export async function getReagentById(
+  db: D1Database,
+  id: number,
+  includeDeleted = false,
+) {
+  return getById(db, id, includeDeleted);
 }
 
 export async function ensureSeeded(db: D1Database) {
@@ -265,7 +281,25 @@ export async function ensureSeeded(db: D1Database) {
 
 export async function listReagents(db: D1Database) {
   const result = await db
-    .prepare(`SELECT ${selectColumns} FROM reagents ORDER BY id DESC`)
+    .prepare(
+      `SELECT ${selectColumns} FROM reagents
+       WHERE deleted_at IS NULL
+       ORDER BY id DESC`,
+    )
+    .all<ReagentRow>();
+  return result.results.map(toReagent);
+}
+
+export async function listDeletedReagents(db: D1Database, limit = 200) {
+  const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
+  const result = await db
+    .prepare(
+      `SELECT ${selectColumns} FROM reagents
+       WHERE deleted_at IS NOT NULL
+       ORDER BY datetime(deleted_at) DESC, id DESC
+       LIMIT ?1`,
+    )
+    .bind(safeLimit)
     .all<ReagentRow>();
   return result.results.map(toReagent);
 }
@@ -411,9 +445,48 @@ export async function updateReagent(
   return getById(db, id);
 }
 
-export async function deleteReagent(db: D1Database, id: number) {
+export async function moveReagentToTrash(
+  db: D1Database,
+  id: number,
+  user: RequestUser,
+) {
+  const now = new Date().toISOString();
   const result = await db
-    .prepare('DELETE FROM reagents WHERE id = ?1')
+    .prepare(
+      `UPDATE reagents SET
+        deleted_at = ?1, deleted_by = ?2, updated_by = ?3,
+        updated_by_email = ?4, updated_at = ?5
+       WHERE id = ?6 AND deleted_at IS NULL`,
+    )
+    .bind(now, user.id, user.id, user.email, now, id)
+    .run();
+  return Number(result.meta.changes ?? 0) > 0;
+}
+
+export async function restoreReagent(
+  db: D1Database,
+  id: number,
+  user: RequestUser,
+) {
+  const existing = await getById(db, id, true);
+  if (!existing?.deletedAt) return null;
+
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `UPDATE reagents SET
+        deleted_at = NULL, deleted_by = NULL, updated = '刚刚',
+        updated_by = ?1, updated_by_email = ?2, updated_at = ?3
+       WHERE id = ?4 AND deleted_at IS NOT NULL`,
+    )
+    .bind(user.id, user.email, now, id)
+    .run();
+  return getById(db, id);
+}
+
+export async function permanentlyDeleteReagent(db: D1Database, id: number) {
+  const result = await db
+    .prepare('DELETE FROM reagents WHERE id = ?1 AND deleted_at IS NOT NULL')
     .bind(id)
     .run();
   return Number(result.meta.changes ?? 0) > 0;
