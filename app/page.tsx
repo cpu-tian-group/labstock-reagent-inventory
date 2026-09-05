@@ -640,7 +640,7 @@ export default function Home() {
           </div>
           <div>
             <p className="brand-name">LabStock</p>
-            <p className="brand-subtitle">课题组试剂库</p>
+            <p className="brand-subtitle">tianlab</p>
           </div>
         </div>
         <div className="topbar-actions">

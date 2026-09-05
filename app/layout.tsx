@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: '课题组试剂库 | LabStock',
+  title: 'tianlab | LabStock',
   description: '查看、搜索和维护课题组实验室试剂信息。',
 };
 
