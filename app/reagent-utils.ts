@@ -72,7 +72,7 @@ export function classifyReagent(name: string) {
       '肌氨酸',
       'taunine',
       '牛磺酸',
-      'nac',
+      'nac(',
       'mes',
       'hepes',
       'tris',
