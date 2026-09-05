@@ -110,7 +110,7 @@ const initialReagents: Reagent[] = [];
 const API_BASE_URL =
   typeof window !== 'undefined' &&
   window.location.hostname.endsWith('.github.io')
-    ? 'https://labstock-reagent-inventory.2442148683.workers.dev'
+    ? 'https://lab-reagent-inventory.wdxak.chatgpt.site'
     : '';
 
 function apiUrl(path: string) {
