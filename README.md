@@ -21,3 +21,5 @@ pnpm dev
 ## Production
 
 The app needs a D1-compatible database binding named `DB` and the runtime secret `LABSTOCK_INVITE_CODE`. Keep both outside source control.
+
+For a Cloudflare Worker build, provide `CLOUDFLARE_D1_DATABASE_ID` and optionally `CLOUDFLARE_D1_DATABASE_NAME` during the build so the generated Worker configuration points to the correct D1 database.

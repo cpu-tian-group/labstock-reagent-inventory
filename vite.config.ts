@@ -7,7 +7,24 @@ import hostingConfig from './.openai/hosting.json';
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
 
-const { d1, r2 } = hostingConfig;
+const configuredHosting = hostingConfig as {
+  d1?: string | null;
+  d1_database_id?: string | null;
+  d1_database_name?: string | null;
+  r2?: string | null;
+};
+
+const { d1, d1_database_id, d1_database_name, r2 } = configuredHosting;
+
+const cloudflareD1DatabaseId =
+  process.env.CLOUDFLARE_D1_DATABASE_ID ??
+  d1_database_id ??
+  SITE_CREATOR_PLACEHOLDER_DATABASE_ID;
+
+const cloudflareD1DatabaseName =
+  process.env.CLOUDFLARE_D1_DATABASE_NAME ??
+  d1_database_name ??
+  'labstock-reagent-db';
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
@@ -19,8 +36,8 @@ const localBindingConfig = {
     ? [
         {
           binding: d1,
-          database_name: 'site-creator-d1',
-          database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
+          database_name: cloudflareD1DatabaseName,
+          database_id: cloudflareD1DatabaseId,
         },
       ]
     : [],
