@@ -36,4 +36,5 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/docs/
 *.tar.gz

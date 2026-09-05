@@ -1,17 +1,24 @@
 import { env } from 'cloudflare:workers';
+import { corsResponse } from './cors';
 
 const SESSION_COOKIE = 'labstock_access';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 
 function runtimeInviteCode() {
-  return (env as unknown as { LABSTOCK_INVITE_CODE?: string })
-    .LABSTOCK_INVITE_CODE?.trim() ?? '';
+  return (
+    (
+      env as unknown as { LABSTOCK_INVITE_CODE?: string }
+    ).LABSTOCK_INVITE_CODE?.trim() ?? ''
+  );
 }
 
 function toBase64Url(bytes: ArrayBuffer | Uint8Array) {
   let binary = '';
   for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+  return btoa(binary)
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/=+$/, '');
 }
 
 function fromBase64Url(value: string) {
@@ -99,11 +106,11 @@ export async function createInviteSession() {
 }
 
 export function sessionCookie(value: string) {
-  return `${SESSION_COOKIE}=${value}; Path=/; Max-Age=${SESSION_MAX_AGE}; HttpOnly; Secure; SameSite=Lax`;
+  return `${SESSION_COOKIE}=${value}; Path=/; Max-Age=${SESSION_MAX_AGE}; HttpOnly; Secure; SameSite=None`;
 }
 
 export function clearSessionCookie() {
-  return `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+  return `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=None`;
 }
 
 export async function validateInviteCode(value: unknown) {
@@ -117,8 +124,11 @@ export async function validateInviteCode(value: unknown) {
 
 export async function requireInviteAccess(request: Request) {
   if (await hasInviteAccess(request)) return null;
-  return Response.json(
-    { error: '请先输入课题组邀请码。' },
-    { status: 401, headers: { 'Cache-Control': 'no-store' } },
+  return corsResponse(
+    request,
+    Response.json(
+      { error: '请先输入课题组邀请码。' },
+      { status: 401, headers: { 'Cache-Control': 'no-store' } },
+    ),
   );
 }

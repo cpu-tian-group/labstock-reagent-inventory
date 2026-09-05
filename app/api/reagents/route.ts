@@ -9,15 +9,16 @@ import {
   type ReagentWriteInput,
 } from '@/lib/reagent-db';
 import { requireInviteAccess } from '@/lib/invite-auth';
+import { addCorsHeaders, preflightResponse } from '@/lib/cors';
 
 export const dynamic = 'force-dynamic';
 
-function json(data: unknown, init?: ResponseInit) {
+function json(request: Request, data: unknown, init?: ResponseInit) {
   const headers = new Headers(init?.headers);
   headers.set('Cache-Control', 'no-store');
   return Response.json(data, {
     ...init,
-    headers,
+    headers: addCorsHeaders(request, headers),
   });
 }
 
@@ -27,7 +28,7 @@ export async function GET(request: Request) {
 
   const db = getDatabase();
   if (!db) {
-    return json({
+    return json(request, {
       reagents: getSeedReagents(),
       persistence: false,
       message: '当前预览环境没有连接共享数据库。',
@@ -36,10 +37,14 @@ export async function GET(request: Request) {
 
   try {
     await ensureSeeded(db);
-    return json({ reagents: await listReagents(db), persistence: true });
+    return json(request, {
+      reagents: await listReagents(db),
+      persistence: true,
+    });
   } catch (error) {
     console.error('Failed to read reagent inventory', error);
     return json(
+      request,
       { error: '共享试剂库暂时不可用，请稍后重试。' },
       { status: 503 },
     );
@@ -52,7 +57,7 @@ export async function POST(request: Request) {
 
   const db = getDatabase();
   if (!db) {
-    return json({ error: '共享数据库尚未连接。' }, { status: 503 });
+    return json(request, { error: '共享数据库尚未连接。' }, { status: 503 });
   }
 
   try {
@@ -68,9 +73,13 @@ export async function POST(request: Request) {
       user,
       summary: `加入试剂库 · ${reagent.location} · ${reagent.storageTemp}`,
     });
-    return json({ reagent }, { status: 201 });
+    return json(request, { reagent }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : '保存试剂失败';
-    return json({ error: message }, { status: 400 });
+    return json(request, { error: message }, { status: 400 });
   }
+}
+
+export function OPTIONS(request: Request) {
+  return preflightResponse(request);
 }
