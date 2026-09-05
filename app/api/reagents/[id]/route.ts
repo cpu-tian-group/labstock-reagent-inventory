@@ -2,7 +2,9 @@ import {
   deleteReagent,
   ensureSeeded,
   getDatabase,
+  getReagentById,
   getRequestUser,
+  recordActivity,
   updateReagent,
   type ReagentWriteInput,
 } from '@/lib/reagent-db';
@@ -39,13 +41,21 @@ export async function PATCH(
     await ensureSeeded(db);
     const id = parseId(await context.params);
     const input = (await request.json()) as ReagentWriteInput;
+    const user = getRequestUser(request);
     const reagent = await updateReagent(
       db,
       id,
       input,
-      getRequestUser(request),
+      user,
     );
     if (!reagent) return json({ error: '试剂不存在或已被删除。' }, { status: 404 });
+    await recordActivity(db, {
+      action: '编辑',
+      reagentId: reagent.id,
+      reagentName: reagent.name,
+      user,
+      summary: `更新试剂信息 · ${reagent.location} · ${reagent.storageTemp}`,
+    });
     return json({ reagent });
   } catch (error) {
     const message = error instanceof Error ? error.message : '更新试剂失败';
@@ -66,8 +76,19 @@ export async function DELETE(
   try {
     await ensureSeeded(db);
     const id = parseId(await context.params);
+    const user = getRequestUser(request);
+    const existing = await getReagentById(db, id);
     const deleted = await deleteReagent(db, id);
     if (!deleted) return json({ error: '试剂不存在或已被删除。' }, { status: 404 });
+    if (existing) {
+      await recordActivity(db, {
+        action: '删除',
+        reagentId: existing.id,
+        reagentName: existing.name,
+        user,
+        summary: `从试剂库删除 · ${existing.location}`,
+      });
+    }
     return json({ deleted: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : '删除试剂失败';

@@ -42,6 +42,17 @@ export type RequestUser = {
   email: string;
 };
 
+export type ActivityRecord = {
+  id: number;
+  action: string;
+  reagentId: number | null;
+  reagentName: string;
+  userId: string;
+  userEmail: string;
+  summary: string;
+  createdAt: string;
+};
+
 type ReagentRow = {
   id: number;
   name: string;
@@ -58,6 +69,17 @@ type ReagentRow = {
   updated: string;
   expiry: string;
   notes: string;
+};
+
+type ActivityRow = {
+  id: number;
+  action: string;
+  reagent_id: number | null;
+  reagent_name: string;
+  user_id: string;
+  user_email: string;
+  summary: string;
+  created_at: string;
 };
 
 const seedMarker = 'reagents-import-v1';
@@ -185,6 +207,10 @@ async function getById(db: D1Database, id: number) {
   return row ? toReagent(row) : null;
 }
 
+export async function getReagentById(db: D1Database, id: number) {
+  return getById(db, id);
+}
+
 export async function ensureSeeded(db: D1Database) {
   const marker = await db
     .prepare('SELECT value FROM inventory_meta WHERE key = ?1')
@@ -242,6 +268,62 @@ export async function listReagents(db: D1Database) {
     .prepare(`SELECT ${selectColumns} FROM reagents ORDER BY id DESC`)
     .all<ReagentRow>();
   return result.results.map(toReagent);
+}
+
+function toActivity(row: ActivityRow): ActivityRecord {
+  return {
+    id: Number(row.id),
+    action: row.action,
+    reagentId: row.reagent_id === null ? null : Number(row.reagent_id),
+    reagentName: row.reagent_name,
+    userId: row.user_id,
+    userEmail: row.user_email,
+    summary: row.summary,
+    createdAt: row.created_at,
+  };
+}
+
+export async function listActivities(db: D1Database, limit = 100) {
+  const safeLimit = Math.min(200, Math.max(1, Math.floor(limit)));
+  const result = await db
+    .prepare(
+      `SELECT id, action, reagent_id, reagent_name, user_id, user_email,
+              summary, created_at
+       FROM reagent_activity
+       ORDER BY id DESC
+       LIMIT ?1`,
+    )
+    .bind(safeLimit)
+    .all<ActivityRow>();
+  return result.results.map(toActivity);
+}
+
+export async function recordActivity(
+  db: D1Database,
+  input: {
+    action: string;
+    reagentId?: number | null;
+    reagentName: string;
+    user: RequestUser;
+    summary: string;
+  },
+) {
+  await db
+    .prepare(
+      `INSERT INTO reagent_activity
+        (action, reagent_id, reagent_name, user_id, user_email, summary, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+    )
+    .bind(
+      input.action,
+      input.reagentId ?? null,
+      input.reagentName,
+      input.user.id,
+      input.user.email,
+      input.summary,
+      new Date().toISOString(),
+    )
+    .run();
 }
 
 export async function insertReagent(

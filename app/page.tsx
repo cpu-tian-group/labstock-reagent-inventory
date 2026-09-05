@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   Beaker,
@@ -8,11 +8,14 @@ import {
   ChevronRight,
   CircleHelp,
   Clock3,
+  ClipboardList,
+  Database,
   FlaskConical,
   Grid2X2,
   History,
   KeyRound,
   Layers3,
+  LogOut,
   MapPin,
   PackageCheck,
   Pencil,
@@ -59,6 +62,21 @@ type Reagent = {
   expiry: string;
   notes: string;
 };
+
+type AppView = 'inventory' | 'alerts' | 'history' | 'categories' | 'settings';
+
+type Activity = {
+  id: number;
+  action: string;
+  reagentId: number | null;
+  reagentName: string;
+  userId: string;
+  userEmail: string;
+  summary: string;
+  createdAt: string;
+};
+
+type ActivityState = 'idle' | 'loading' | 'ready' | 'offline';
 
 type ModelContextLike = {
   registerTool: (
@@ -140,6 +158,20 @@ async function deleteReagentRequest(id: number) {
     error?: string;
   };
   if (!response.ok) throw new Error(payload.error || '删除试剂失败');
+}
+
+async function fetchActivitiesRequest() {
+  const response = await fetch('/api/activity?limit=100', {
+    cache: 'no-store',
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    activities?: Activity[];
+    error?: string;
+  };
+  if (!response.ok || !Array.isArray(payload.activities)) {
+    throw new Error(payload.error || '操作记录暂时不可用');
+  }
+  return payload.activities;
 }
 
 type InviteGateProps = {
@@ -286,6 +318,366 @@ function getCategoryTone(category: string) {
   return tones[category] ?? 'category-slate';
 }
 
+function getViewFromHash(hash: string): AppView {
+  const value = hash.replace(/^#/, '') as AppView;
+  return ['inventory', 'alerts', 'history', 'categories', 'settings'].includes(value)
+    ? value
+    : 'inventory';
+}
+
+function formatActivityTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function WorkspaceViewHeader({
+  eyebrow,
+  title,
+  description,
+  action,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="content-heading workspace-view-header">
+      <div>
+        <p className="eyebrow">{eyebrow}</p>
+        <h1>{title}</h1>
+        <p className="heading-copy">{description}</p>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function AlertReagentRow({
+  reagent,
+  onSelect,
+}: {
+  reagent: Reagent;
+  onSelect: (reagent: Reagent) => void;
+}) {
+  const status = statusStyle[reagent.status];
+  const StatusIcon = status.icon;
+  return (
+    <button
+      className="alert-reagent-row"
+      type="button"
+      onClick={() => onSelect(reagent)}
+    >
+      <span className={`alert-row-icon ${status.chip}`}>
+        <StatusIcon size={16} />
+      </span>
+      <span className="alert-row-main">
+        <strong>{reagent.name}</strong>
+        <span>{reagent.status} · 当前 {formatNumber(reagent.stock)} {reagent.unit}</span>
+      </span>
+      <span className="alert-row-location">
+        <MapPin size={14} />
+        {reagent.location}
+      </span>
+      <ChevronRight size={16} className="alert-row-arrow" />
+    </button>
+  );
+}
+
+function AlertsView({
+  reagents,
+  onSelect,
+  onViewInventory,
+  onAdd,
+}: {
+  reagents: Reagent[];
+  onSelect: (reagent: Reagent) => void;
+  onViewInventory: () => void;
+  onAdd: () => void;
+}) {
+  const lowStockReagents = reagents.filter((reagent) => reagent.status === '偏低');
+  const expiringReagents = reagents.filter(
+    (reagent) => reagent.status === '即将过期',
+  );
+  const pendingInfo = reagents.filter(
+    (reagent) => reagent.expiry === '未录入' || reagent.supplier === '—',
+  );
+
+  return (
+    <div className="workspace-view">
+      <WorkspaceViewHeader
+        eyebrow="WORKSPACE / ALERTS"
+        title="库存提醒"
+        description="集中查看需要补货、临近有效期或资料尚未补全的试剂。点击任意记录可直接打开详情。"
+        action={
+          <Button className="view-header-button" onClick={onAdd}>
+            <Plus size={17} />
+            新增试剂
+          </Button>
+        }
+      />
+
+      <div className="view-stat-grid">
+        <div className="view-stat-card view-stat-amber">
+          <div className="view-stat-icon"><AlertTriangle size={18} /></div>
+          <div><span>库存偏低</span><strong>{lowStockReagents.length}</strong><small>需要补货</small></div>
+        </div>
+        <div className="view-stat-card view-stat-rose">
+          <div className="view-stat-icon"><Clock3 size={18} /></div>
+          <div><span>临近有效期</span><strong>{expiringReagents.length}</strong><small>30 天内到期</small></div>
+        </div>
+        <div className="view-stat-card view-stat-blue">
+          <div className="view-stat-icon"><ClipboardList size={18} /></div>
+          <div><span>待补充资料</span><strong>{pendingInfo.length}</strong><small>有效期或供应商</small></div>
+        </div>
+      </div>
+
+      <div className="workspace-columns">
+        <section className="view-card alert-list-card">
+          <div className="view-card-heading">
+            <div>
+              <h2>需要处理</h2>
+              <p>库存和有效期提醒会根据当前记录自动更新。</p>
+            </div>
+            <AlertTriangle size={20} className="view-card-heading-icon" />
+          </div>
+          {lowStockReagents.length === 0 && expiringReagents.length === 0 ? (
+            <div className="view-empty compact-empty">
+              <CheckCircle2 size={24} />
+              <strong>目前没有需要处理的提醒</strong>
+              <span>当前试剂库存充足，且没有录入 30 天内到期的试剂。</span>
+            </div>
+          ) : (
+            <div className="alert-list">
+              {[...lowStockReagents, ...expiringReagents].map((reagent) => (
+                <AlertReagentRow key={`${reagent.id}-${reagent.status}`} reagent={reagent} onSelect={onSelect} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="view-card alert-guide-card">
+          <div className="view-card-heading">
+            <div>
+              <h2>快速处理</h2>
+              <p>把缺失信息补齐，方便组员定位和使用。</p>
+            </div>
+            <PackageCheck size={20} className="view-card-heading-icon" />
+          </div>
+          <div className="guide-step-list">
+            <div className="guide-step"><span>01</span><div><strong>补充位置</strong><p>在试剂详情中确认冰箱格位。</p></div></div>
+            <div className="guide-step"><span>02</span><div><strong>更新库存</strong><p>试剂使用后及时修改当前数量。</p></div></div>
+            <div className="guide-step"><span>03</span><div><strong>查看全部</strong><p>按名称、CAS 或位置检索记录。</p></div></div>
+          </div>
+          <Button variant="outline" className="wide-outline-button" onClick={onViewInventory}>
+            <Search size={15} />
+            去试剂库查看
+          </Button>
+        </section>
+      </div>
+
+      <section className="view-card completion-card">
+        <div className="completion-copy">
+          <div className="view-card-heading-icon completion-icon"><ClipboardList size={19} /></div>
+          <div><h2>本周盘点</h2><p>共有 {pendingInfo} 条记录仍缺少有效期或供应商信息，可从试剂库逐条补充。</p></div>
+        </div>
+        <Button variant="outline" onClick={onViewInventory}>打开试剂库</Button>
+      </section>
+    </div>
+  );
+}
+
+function HistoryView({
+  activities,
+  state,
+  onRefresh,
+  onAdd,
+}: {
+  activities: Activity[];
+  state: ActivityState;
+  onRefresh: () => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="workspace-view">
+      <WorkspaceViewHeader
+        eyebrow="WORKSPACE / ACTIVITY"
+        title="操作记录"
+        description="记录新增、编辑和删除操作，方便课题组成员追踪库存变化。"
+        action={
+          <div className="view-header-actions">
+            <Button variant="outline" onClick={onRefresh} disabled={state === 'loading'}>
+              <RefreshCw size={15} className={state === 'loading' ? 'spin-icon' : ''} />
+              刷新记录
+            </Button>
+            <Button className="view-header-button" onClick={onAdd}>
+              <Plus size={17} />
+              新增试剂
+            </Button>
+          </div>
+        }
+      />
+
+      <section className="view-card activity-card">
+        <div className="view-card-heading">
+          <div><h2>最近活动</h2><p>显示最近 100 条共享数据库操作。</p></div>
+          <History size={20} className="view-card-heading-icon" />
+        </div>
+        {state === 'loading' && activities.length === 0 ? (
+          <div className="view-loading"><RefreshCw size={20} className="spin-icon" />正在加载操作记录…</div>
+        ) : activities.length === 0 ? (
+          <div className="view-empty">
+            <History size={26} />
+            <strong>暂时还没有操作记录</strong>
+            <span>新增、编辑或删除试剂后，记录会自动出现在这里。</span>
+          </div>
+        ) : (
+          <div className="activity-list">
+            {activities.map((activity) => {
+              const isDelete = activity.action === '删除';
+              const isAdd = activity.action === '新增' || activity.action === '导入';
+              return (
+                <div className="activity-row" key={activity.id}>
+                  <div className={`activity-icon ${isDelete ? 'activity-delete' : isAdd ? 'activity-add' : 'activity-edit'}`}>
+                    {isDelete ? <Trash2 size={16} /> : isAdd ? <Plus size={17} /> : <Pencil size={16} />}
+                  </div>
+                  <div className="activity-main">
+                    <strong>{activity.action} · {activity.reagentName}</strong>
+                    <span>{activity.summary}</span>
+                  </div>
+                  <div className="activity-meta">
+                    <span>{activity.userEmail || (activity.userId === 'import' ? '系统导入' : '组内成员')}</span>
+                    <time>{formatActivityTime(activity.createdAt)}</time>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function CategoriesView({
+  reagents,
+  onViewCategory,
+  onAdd,
+}: {
+  reagents: Reagent[];
+  onViewCategory: (category: string) => void;
+  onAdd: () => void;
+}) {
+  const categories = categoryFilters.filter((category) => category !== '全部');
+  return (
+    <div className="workspace-view">
+      <WorkspaceViewHeader
+        eyebrow="TOOLS / CATEGORIES"
+        title="分类管理"
+        description="按用途查看试剂分布。当前分类为课题组预设分类，新增试剂时可以直接选择。"
+        action={
+          <Button className="view-header-button" onClick={onAdd}>
+            <Plus size={17} />
+            新增试剂
+          </Button>
+        }
+      />
+      <div className="category-overview-bar">
+        <div><span>已启用分类</span><strong>{categories.length}</strong></div>
+        <div><span>已归类试剂</span><strong>{reagents.length}</strong></div>
+        <div><span>占用位置</span><strong>{new Set(reagents.map((reagent) => reagent.location)).size}</strong></div>
+      </div>
+      <div className="category-manage-grid">
+        {categories.map((category) => {
+          const items = reagents.filter((reagent) => reagent.category === category);
+          const temperatures = ['4℃', '-20℃', '常温']
+            .map((temperature) => ({ temperature, count: items.filter((item) => item.storageTemp === temperature).length }))
+            .filter((item) => item.count > 0);
+          return (
+            <section className="category-manage-card" key={category}>
+              <div className="category-manage-topline">
+                <span className={`category-label ${getCategoryTone(category)}`}><Tag size={12} />{category}</span>
+                <strong>{items.length}<small> 项</small></strong>
+              </div>
+              <p>{items.length ? '已收录在共享试剂库中' : '暂时没有该分类试剂'}</p>
+              <div className="category-temperature-list">
+                {temperatures.length ? temperatures.map((item) => <span key={item.temperature}>{item.temperature} <b>{item.count}</b></span>) : <span>暂无温度记录</span>}
+              </div>
+              <Button variant="outline" className="category-view-button" onClick={() => onViewCategory(category)} disabled={items.length === 0}>
+                查看此分类 <ChevronRight size={14} />
+              </Button>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({
+  syncState,
+  reagentCount,
+  pendingInfoCount,
+  onRefresh,
+  onSignOut,
+}: {
+  syncState: 'loading' | 'ready' | 'offline';
+  reagentCount: number;
+  pendingInfoCount: number;
+  onRefresh: () => void;
+  onSignOut: () => void;
+}) {
+  const syncLabel = syncState === 'ready' ? '已连接并实时同步' : syncState === 'loading' ? '正在连接数据库' : '连接异常';
+  return (
+    <div className="workspace-view">
+      <WorkspaceViewHeader
+        eyebrow="TOOLS / SETTINGS"
+        title="设置"
+        description="查看当前工作区连接状态和数据来源。配置变化会影响所有使用这个网站的成员。"
+      />
+      <div className="settings-grid">
+        <section className="view-card settings-card">
+          <div className="view-card-heading">
+            <div><h2>工作区信息</h2><p>当前共享试剂库的基础信息。</p></div>
+            <UsersRound size={20} className="view-card-heading-icon" />
+          </div>
+          <div className="settings-row"><span>工作区名称</span><strong>tianlab</strong></div>
+          <div className="settings-row"><span>访问方式</span><strong>邀请码访问</strong></div>
+          <div className="settings-row"><span>共享成员权限</span><strong>可查看、新增、编辑、删除</strong></div>
+          <div className="settings-row"><span>本设备状态</span><strong className="settings-status"><span className="settings-status-dot" />已授权</strong></div>
+        </section>
+        <section className="view-card settings-card">
+          <div className="view-card-heading">
+            <div><h2>数据连接</h2><p>线上数据库与当前页面的状态。</p></div>
+            <Database size={20} className="view-card-heading-icon" />
+          </div>
+          <div className="settings-row"><span>数据库状态</span><strong className={`settings-status settings-${syncState}`}><span className="settings-status-dot" />{syncLabel}</strong></div>
+          <div className="settings-row"><span>当前试剂</span><strong>{reagentCount} 条</strong></div>
+          <div className="settings-row"><span>数据来源</span><strong>冰箱清单</strong></div>
+          <div className="settings-row"><span>待补信息</span><strong>{pendingInfoCount} 条</strong></div>
+          <Button variant="outline" className="wide-outline-button" onClick={onRefresh}>
+            <RefreshCw size={15} />
+            重新同步数据
+          </Button>
+        </section>
+      </div>
+      <section className="view-card settings-danger-card">
+        <div><h2>本设备访问</h2><p>退出后需要再次输入课题组邀请码才能进入。</p></div>
+        <Button variant="outline" className="sign-out-button" onClick={onSignOut}>
+          <LogOut size={15} />
+          退出当前设备
+        </Button>
+      </section>
+    </div>
+  );
+}
+
 export default function Home() {
   const [reagents, setReagents] = useState(initialReagents);
   const [search, setSearch] = useState('');
@@ -300,7 +692,23 @@ export default function Home() {
   const [inviteError, setInviteError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [syncState, setSyncState] = useState<'loading' | 'ready' | 'offline'>('loading');
+  const [activeView, setActiveView] = useState<AppView>('inventory');
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterTemperature, setFilterTemperature] = useState('全部');
+  const [filterStatus, setFilterStatus] = useState('全部');
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [activityState, setActivityState] = useState<ActivityState>('idle');
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const reagentsRef = useRef(reagents);
+
+  useEffect(() => {
+    const syncViewFromHash = () => {
+      setActiveView(getViewFromHash(window.location.hash));
+    };
+    syncViewFromHash();
+    window.addEventListener('hashchange', syncViewFromHash);
+    return () => window.removeEventListener('hashchange', syncViewFromHash);
+  }, []);
 
   useEffect(() => {
     reagentsRef.current = reagents;
@@ -332,40 +740,48 @@ export default function Home() {
     };
   }, []);
 
-  useEffect(() => {
-    if (accessState !== 'authorized') return;
-    let active = true;
-    const loadSharedInventory = async () => {
-      try {
-        const response = await fetch('/api/reagents', { cache: 'no-store' });
-        const payload = (await response.json().catch(() => ({}))) as {
-          reagents?: Reagent[];
-          error?: string;
-        };
-        if (response.status === 401) {
-          if (active) {
-            setAccessState('locked');
-            setSyncState('offline');
-          }
-          return;
-        }
-        if (!response.ok || !Array.isArray(payload.reagents)) {
-          throw new Error(payload.error || 'shared inventory unavailable');
-        }
-        if (active) {
-          setReagents(payload.reagents);
-          setSyncState('ready');
-        }
-      } catch {
-        if (active) setSyncState('offline');
+  async function refreshSharedInventory() {
+    setSyncState('loading');
+    try {
+      const response = await fetch('/api/reagents', { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as {
+        reagents?: Reagent[];
+        error?: string;
+      };
+      if (response.status === 401) {
+        setAccessState('locked');
+        setSyncState('offline');
+        return;
       }
-    };
+      if (!response.ok || !Array.isArray(payload.reagents)) {
+        throw new Error(payload.error || 'shared inventory unavailable');
+      }
+      setReagents(payload.reagents);
+      setSyncState('ready');
+    } catch {
+      setSyncState('offline');
+    }
+  }
 
-    void loadSharedInventory();
-    return () => {
-      active = false;
-    };
+  useEffect(() => {
+    if (accessState === 'authorized') void refreshSharedInventory();
   }, [accessState]);
+
+  async function refreshActivityLog() {
+    setActivityState('loading');
+    try {
+      setActivities(await fetchActivitiesRequest());
+      setActivityState('ready');
+    } catch {
+      setActivityState('offline');
+    }
+  }
+
+  useEffect(() => {
+    if (accessState === 'authorized' && activeView === 'history') {
+      void refreshActivityLog();
+    }
+  }, [accessState, activeView]);
 
   useEffect(() => {
     const context = (document as Document & { modelContext?: ModelContextLike })
@@ -497,9 +913,11 @@ export default function Home() {
 
   const filteredReagents = useMemo(() => {
     return reagents.filter((reagent) =>
-      reagentMatches(reagent, search, activeCategory),
+      reagentMatches(reagent, search, activeCategory) &&
+      (filterTemperature === '全部' || reagent.storageTemp === filterTemperature) &&
+      (filterStatus === '全部' || reagent.status === filterStatus),
     );
-  }, [activeCategory, reagents, search]);
+  }, [activeCategory, filterStatus, filterTemperature, reagents, search]);
 
   const lowStockCount = reagents.filter(
     (reagent) => reagent.status === '偏低',
@@ -510,6 +928,32 @@ export default function Home() {
   const pendingInfoCount = reagents.filter(
     (reagent) => reagent.expiry === '未录入' || reagent.supplier === '—',
   ).length;
+
+  function navigateTo(view: AppView) {
+    if (window.location.hash === `#${view}`) {
+      setActiveView(view);
+      return;
+    }
+    window.location.hash = view;
+  }
+
+  function viewCategory(category: string) {
+    setSearch('');
+    setActiveCategory(category);
+    setFilterTemperature('全部');
+    setFilterStatus('全部');
+    setFilterOpen(false);
+    navigateTo('inventory');
+  }
+
+  async function handleSignOut() {
+    await fetch('/api/access', { method: 'DELETE', cache: 'no-store' }).catch(() => undefined);
+    setSelected(null);
+    setReagents([]);
+    setActiveView('inventory');
+    setAccessState('locked');
+    window.location.hash = 'inventory';
+  }
 
   async function handleInviteSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -593,6 +1037,7 @@ export default function Home() {
       setEditingId(null);
       setIsAddOpen(false);
       setSyncState('ready');
+      void refreshActivityLog();
     } catch (error) {
       window.alert(error instanceof Error ? error.message : '保存失败，请稍后重试。');
     } finally {
@@ -610,6 +1055,7 @@ export default function Home() {
       setReagents((current) => current.filter((item) => item.id !== reagent.id));
       setSelected(null);
       setSyncState('ready');
+      void refreshActivityLog();
     } catch (error) {
       window.alert(error instanceof Error ? error.message : '删除失败，请稍后重试。');
     }
@@ -649,7 +1095,7 @@ export default function Home() {
             <span>工作区共享</span>
             <span className={`sync-dot sync-${syncState}`} aria-hidden="true" />
           </div>
-          <Button variant="ghost" size="icon" aria-label="帮助">
+          <Button variant="ghost" size="icon" aria-label="帮助" onClick={() => setIsHelpOpen(true)}>
             <CircleHelp size={18} />
           </Button>
           <div className="avatar" aria-label="当前用户">
@@ -662,17 +1108,17 @@ export default function Home() {
         <aside className="sidebar" aria-label="主导航">
           <div className="sidebar-section-label">WORKSPACE</div>
           <nav className="sidebar-nav">
-            <a className="sidebar-link active" href="#inventory">
+            <a className={`sidebar-link ${activeView === 'inventory' ? 'active' : ''}`} href="#inventory">
               <Grid2X2 size={17} />
               <span>试剂库</span>
               <span className="nav-count">{reagents.length}</span>
             </a>
-            <a className="sidebar-link" href="#alerts">
+            <a className={`sidebar-link ${activeView === 'alerts' ? 'active' : ''}`} href="#alerts">
               <AlertTriangle size={17} />
               <span>库存提醒</span>
               <span className="nav-count alert-count">{lowStockCount}</span>
             </a>
-            <a className="sidebar-link" href="#history">
+            <a className={`sidebar-link ${activeView === 'history' ? 'active' : ''}`} href="#history">
               <History size={17} />
               <span>操作记录</span>
             </a>
@@ -680,17 +1126,17 @@ export default function Home() {
 
           <div className="sidebar-section-label second-label">TOOLS</div>
           <nav className="sidebar-nav">
-            <a className="sidebar-link" href="#categories">
+            <a className={`sidebar-link ${activeView === 'categories' ? 'active' : ''}`} href="#categories">
               <Layers3 size={17} />
               <span>分类管理</span>
             </a>
-            <a className="sidebar-link" href="#settings">
+            <a className={`sidebar-link ${activeView === 'settings' ? 'active' : ''}`} href="#settings">
               <Settings2 size={17} />
               <span>设置</span>
             </a>
           </nav>
 
-          <div className="sidebar-footer-card">
+          <button className="sidebar-footer-card" type="button" onClick={() => navigateTo('alerts')}>
             <div className="footer-card-icon">
               <PackageCheck size={18} />
             </div>
@@ -699,10 +1145,11 @@ export default function Home() {
               <p className="footer-card-copy">还有 {pendingInfoCount} 项待补信息</p>
             </div>
             <ChevronRight size={16} className="footer-card-arrow" />
-          </div>
+          </button>
         </aside>
 
-        <main className="content" id="inventory">
+        <main className="content" id={activeView}>
+          <div className="inventory-page" hidden={activeView !== 'inventory'}>
           <div className="content-heading">
             <div>
               <p className="eyebrow">LAB INVENTORY / 2026.09</p>
@@ -762,7 +1209,12 @@ export default function Home() {
                 <h2 id="inventory-title">全部试剂</h2>
                 <p>{filteredReagents.length} 项结果 · 按位置与保存条件查看</p>
               </div>
-              <Button variant="outline" className="filter-button">
+              <Button
+                variant="outline"
+                className="filter-button"
+                onClick={() => setFilterOpen((current) => !current)}
+                aria-expanded={filterOpen}
+              >
                 <SlidersHorizontal size={16} />
                 筛选
               </Button>
@@ -788,6 +1240,41 @@ export default function Home() {
                   </button>
                 )}
               </div>
+              {filterOpen && (
+                <div className="advanced-filter-panel">
+                  <label>
+                    <span>保存温度</span>
+                    <select value={filterTemperature} onChange={(event) => setFilterTemperature(event.target.value)}>
+                      <option>全部</option>
+                      <option>4℃</option>
+                      <option>-20℃</option>
+                      <option>常温</option>
+                      <option>待确认</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>库存状态</span>
+                    <select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)}>
+                      <option>全部</option>
+                      <option>充足</option>
+                      <option>偏低</option>
+                      <option>即将过期</option>
+                    </select>
+                  </label>
+                  <div className="advanced-filter-summary">
+                    <span>当前筛选出 {filteredReagents.length} 项</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterTemperature('全部');
+                        setFilterStatus('全部');
+                      }}
+                    >
+                      重置条件
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="filter-chips" aria-label="试剂分类">
                 {categoryFilters.map((category) => (
                   <button
@@ -884,6 +1371,8 @@ export default function Home() {
                   onClick={() => {
                     setSearch('');
                     setActiveCategory('全部');
+                    setFilterTemperature('全部');
+                    setFilterStatus('全部');
                   }}
                 >
                   清除筛选
@@ -891,15 +1380,49 @@ export default function Home() {
               </div>
             )}
           </section>
+          </div>
+
+          {activeView === 'alerts' && (
+            <AlertsView
+              reagents={reagents}
+              onSelect={setSelected}
+              onViewInventory={() => navigateTo('inventory')}
+              onAdd={openAddDialog}
+            />
+          )}
+          {activeView === 'history' && (
+            <HistoryView
+              activities={activities}
+              state={activityState}
+              onRefresh={() => void refreshActivityLog()}
+              onAdd={openAddDialog}
+            />
+          )}
+          {activeView === 'categories' && (
+            <CategoriesView
+              reagents={reagents}
+              onViewCategory={viewCategory}
+              onAdd={openAddDialog}
+            />
+          )}
+          {activeView === 'settings' && (
+            <SettingsView
+              syncState={syncState}
+              reagentCount={reagents.length}
+              pendingInfoCount={pendingInfoCount}
+              onRefresh={() => void refreshSharedInventory()}
+              onSignOut={() => void handleSignOut()}
+            />
+          )}
         </main>
       </div>
 
       <nav className="mobile-nav" aria-label="移动端导航">
-        <a className="mobile-nav-link active" href="#inventory">
+        <a className={`mobile-nav-link ${activeView === 'inventory' ? 'active' : ''}`} href="#inventory">
           <Grid2X2 size={18} />
           <span>试剂库</span>
         </a>
-        <a className="mobile-nav-link" href="#alerts">
+        <a className={`mobile-nav-link ${activeView === 'alerts' ? 'active' : ''}`} href="#alerts">
           <AlertTriangle size={18} />
           <span>提醒</span>
         </a>
@@ -911,11 +1434,11 @@ export default function Home() {
         >
           <Plus size={23} />
         </button>
-        <a className="mobile-nav-link" href="#history">
+        <a className={`mobile-nav-link ${activeView === 'history' ? 'active' : ''}`} href="#history">
           <History size={18} />
           <span>记录</span>
         </a>
-        <a className="mobile-nav-link" href="#settings">
+        <a className={`mobile-nav-link ${activeView === 'settings' ? 'active' : ''}`} href="#settings">
           <UserRound size={18} />
           <span>我的</span>
         </a>
@@ -1153,6 +1676,25 @@ export default function Home() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isHelpOpen} onOpenChange={setIsHelpOpen}>
+        <DialogContent className="help-dialog">
+          <DialogHeader>
+            <div className="help-dialog-icon"><CircleHelp size={20} /></div>
+            <DialogTitle>使用说明</DialogTitle>
+            <DialogDescription>tianlab 共享试剂库的常用操作。</DialogDescription>
+          </DialogHeader>
+          <div className="help-list">
+            <div><strong>检索试剂</strong><span>在试剂库搜索框输入名称、CAS 号、位置或供应商。</span></div>
+            <div><strong>查看和修改</strong><span>点击试剂卡片查看详情，再选择“编辑信息”或“删除”。</span></div>
+            <div><strong>新增试剂</strong><span>点击页面右上角或各功能页的“新增试剂”，保存后所有成员都能看到。</span></div>
+            <div><strong>查看变化</strong><span>操作记录会保存新增、编辑和删除的时间及操作者。</span></div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setIsHelpOpen(false)}>知道了</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

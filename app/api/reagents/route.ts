@@ -5,6 +5,7 @@ import {
   getSeedReagents,
   insertReagent,
   listReagents,
+  recordActivity,
   type ReagentWriteInput,
 } from '@/lib/reagent-db';
 import { requireInviteAccess } from '@/lib/invite-auth';
@@ -57,8 +58,16 @@ export async function POST(request: Request) {
   try {
     await ensureSeeded(db);
     const input = (await request.json()) as ReagentWriteInput;
-    const reagent = await insertReagent(db, input, getRequestUser(request));
+    const user = getRequestUser(request);
+    const reagent = await insertReagent(db, input, user);
     if (!reagent) throw new Error('试剂保存后无法读取');
+    await recordActivity(db, {
+      action: '新增',
+      reagentId: reagent.id,
+      reagentName: reagent.name,
+      user,
+      summary: `加入试剂库 · ${reagent.location} · ${reagent.storageTemp}`,
+    });
     return json({ reagent }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : '保存试剂失败';
