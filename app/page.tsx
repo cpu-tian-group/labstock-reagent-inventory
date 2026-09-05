@@ -109,9 +109,10 @@ const initialReagents: Reagent[] = [];
 
 const API_BASE_URL =
   typeof window !== 'undefined' &&
-  window.location.hostname.endsWith('.github.io')
+  (window.location.hostname.endsWith('.github.io') ||
+    window.location.hostname === 'cputianlab.cn')
     ? 'https://lab-reagent-inventory.wdxak.chatgpt.site'
-    : '';
+    : '/management-api';
 
 function apiUrl(path: string) {
   return `${API_BASE_URL}${path}`;

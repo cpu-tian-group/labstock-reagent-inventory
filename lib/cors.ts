@@ -1,7 +1,10 @@
-const GITHUB_PAGES_ORIGIN = 'https://cpu-tian-group.github.io';
+const ALLOWED_ORIGINS = new Set([
+  'https://cpu-tian-group.github.io',
+  'https://cputianlab.cn',
+]);
 
 function isAllowedOrigin(origin: string | null) {
-  return origin === GITHUB_PAGES_ORIGIN;
+  return origin !== null && ALLOWED_ORIGINS.has(origin);
 }
 
 export function addCorsHeaders(request: Request, source?: HeadersInit) {

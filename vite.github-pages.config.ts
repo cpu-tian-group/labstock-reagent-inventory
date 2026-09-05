@@ -9,7 +9,7 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   root: path.join(projectRoot, 'github-pages'),
-  base: '/labstock-reagent-inventory/',
+  base: './',
   resolve: {
     alias: {
       '@': projectRoot,
